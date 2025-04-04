@@ -23,12 +23,13 @@
               libxkbcommon.dev
               pipewire.dev
               wayland
+              vulkan-loader
               # libclang.lib
               # libGL
               # dbus
             ];
-            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
-            LD_LIBRARY_PATH = builtins.foldl' (a: b: "${a}:${b}/lib") "${pkgs.vulkan-loader}/lib" buildInputs; # TODO: wtf is this
+            LIBCLANG_PATH = nixpkgs.lib.makeLibraryPath [ pkgs.libclang.lib ];
+            LD_LIBRARY_PATH = nixpkgs.lib.makeLibraryPath buildInputs;
           };
       packages.${system}.default = pkgs.callPackage ./default.nix { };
       apps.${system}.default = {
