@@ -45,12 +45,13 @@ pub async fn receiver() -> Result<(JoinHandle<()>, TokioUnboundedReceiver<String
         };
         tx2.send(None).unwrap();
 
+        let weak_mainloop = mainloop.clone().downgrade();
         // TODO: find the event to listen
         let _listener = registry
             .add_listener_local()
             .global(move |global| match &global.type_ {
                 ObjectType::Metadata => {
-                    tx.send(format!(
+                    let message = format!(
                         "got a node and the props is {{\n{}}}",
                         match global.props {
                             Some(x) => format!(
@@ -61,8 +62,12 @@ pub async fn receiver() -> Result<(JoinHandle<()>, TokioUnboundedReceiver<String
                             ),
                             None => "None".to_owned(),
                         }
-                    ))
-                    .unwrap();
+                    );
+                    if tx.send(message).is_err() {
+                        if let Some(mainloop) = weak_mainloop.upgrade() {
+                            mainloop.quit();
+                        }
+                    }
                 }
                 _ => (),
                 //other => tx
