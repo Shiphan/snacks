@@ -53,22 +53,35 @@ async fn event_loop(mut sender: Sender<Message>) {
         }
     };
 
-    macro_rules! join_receiver {
-        ( sender = $x:expr, $( $y:expr ), * ) => {
-            tokio::join!($({
-                async { loop {
-                    match $y.recv().await {
-                        Some(v) => $x
-                            .clone()
-                            .start_send(Message::Update(v))
-                            .unwrap(),
-                        None => break,
-                    };
-                } }
-            },)*)
-        };
-    }
-    let _ = join_receiver!(sender = sender, mpris_receiver);
+    let mpris_handle = async {
+        loop {
+            sender
+                .start_send(match mpris_receiver.recv().await {
+                    Some(monitor::mpris::Update::Other(message)) => Message::Update(message),
+                    Some(v) => Message::Update(format!("{v:?}")),
+                    None => break,
+                })
+                .unwrap();
+        }
+    };
+    tokio::join!(mpris_handle);
+
+    // macro_rules! join_receiver {
+    //     ( sender = $x:expr, $( $y:expr ), * ) => {
+    //         tokio::join!($({
+    //             async { loop {
+    //                 match $y.recv().await {
+    //                     Some(v) => $x
+    //                         .clone()
+    //                         .start_send(Message::Update(format!("{v:?}")))
+    //                         .unwrap(),
+    //                     None => break,
+    //                 };
+    //             } }
+    //         },)*)
+    //     };
+    // }
+    // let _ = join_receiver!(sender = sender, mpris_receiver);
     //let _ = join_receiver!(sender = sender, pipewire_receiver, mpris_receiver);
 }
 
