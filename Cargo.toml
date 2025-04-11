@@ -3,6 +3,9 @@ name = "snacks"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = [ "update", "update_derive" ]
+
 [dependencies]
 futures = "0.3.31"
 pipewire = "0.8.0"
@@ -10,6 +13,7 @@ pipewire = "0.8.0"
 serde = "1.0.218"
 tokio = { version = "1.43.0", features = ["full"] }
 toml = "0.8.20"
+update = { path = "./update" }
 zbus = "5.5.0"
 
 [dependencies.libcosmic]

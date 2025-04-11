@@ -1,12 +1,15 @@
 use cosmic::app::{Core, Task};
 use cosmic::iced::advanced::graphics::futures::stream;
-use cosmic::iced::futures::channel::mpsc::Sender;
-use cosmic::iced::window;
-use cosmic::iced::Subscription;
+use cosmic::iced::{self, Subscription, task, window};
 use cosmic::prelude::*;
 use cosmic::widget;
 use futures::SinkExt;
+use futures::channel::mpsc::Sender;
+use monitor::mpris::{Metadata, PlaybackStatus, Properties};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc::{self, UnboundedSender};
+use update::Update;
 //use sctk::reexports::client::globals;
 //use sctk::shell::wlr_layer::LayerShell;
 
@@ -46,7 +49,7 @@ async fn event_loop(mut sender: Sender<Message>) {
         }
     };
     let mut mpris_receiver = match monitor::mpris::receiver().await {
-        Ok((_, mpris_receiver)) => mpris_receiver,
+        Ok(mpris_receiver) => mpris_receiver,
         Err(e) => {
             sender
                 .send(Message::Error(format!("Error: {:?}", e)))
@@ -57,11 +60,18 @@ async fn event_loop(mut sender: Sender<Message>) {
     };
 
     let mpris_handle = async {
+        use monitor::mpris::Event;
         loop {
             sender
                 .start_send(match mpris_receiver.recv().await {
-                    Some(monitor::mpris::Update::Other(message)) => Message::Update(message),
-                    Some(v) => Message::Update(format!("{v:?}")),
+                    Some(Event::NewMethodCall) => Message::OpenWindow,
+                    Some(Event::Update(update)) => {
+                        Message::UpdateMedia(UpdateMedia::Update(update))
+                    }
+                    Some(Event::RemoveProperties(properties)) => {
+                        Message::UpdateMedia(UpdateMedia::Remove(properties))
+                    }
+                    Some(Event::Error(error)) => Message::Error(error),
                     None => break,
                 })
                 .unwrap();
@@ -91,8 +101,10 @@ async fn event_loop(mut sender: Sender<Message>) {
 struct AppModel {
     core: Core,
     window: Option<window::Id>,
-    c: u32,
-    list: Vec<Result<String, String>>,
+    timeout: Duration,
+    timer_abort_handle: Option<task::Handle>,
+    media_status: monitor::mpris::Properties,
+    error_message: Option<String>,
 }
 
 impl cosmic::Application for AppModel {
@@ -112,59 +124,68 @@ impl cosmic::Application for AppModel {
         let app = Self {
             window: core.main_window_id(),
             core,
-            c: 0,
-            list: vec![Ok("init".to_owned())],
+            timeout: Duration::from_secs(2),
+            timer_abort_handle: None,
+            media_status: Properties::default(),
+            error_message: None,
         };
         println!("window: {:?}", app.window);
         (app, Task::none())
     }
-    // TODO: hide the header bar
     fn view(&self) -> Element<Self::Message> {
-        let mut list = widget::ListColumn::default();
-        for item in self.list.iter().rev() {
-            list = match item {
-                Ok(s) => list.add(widget::text(s)),
-                Err(e) => list.add(widget::warning(e)),
-            };
-        }
-        widget::scrollable(list).into()
+        widget::row().into()
     }
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         println!("update: {:?}", message);
         match message {
-            Message::Update(s) => {
-                self.c += 1;
-                self.list.push(Ok(s));
-                Task::done(cosmic::app::Message::App(Message::Refresh))
+            Message::UpdateMedia(update) => {
+                match update {
+                    UpdateMedia::Replace(properties) => self.media_status = properties,
+                    UpdateMedia::Remove(properties) => {
+                        self.media_status.remove(properties.as_slice())
+                    }
+                    UpdateMedia::Update(properties) => self.media_status.update(properties),
+                }
+                println!("media status: {:#?}", self.media_status);
+                Task::none()
             }
             Message::Error(e) => {
-                self.list.push(Err(e));
-                Task::done(cosmic::app::Message::App(Message::Refresh))
+                self.error_message = Some(format!("error: {e}"));
+                Task::done(cosmic::app::Message::App(Message::OpenWindow))
             }
             Message::Clicked => {
                 // TODO: stop timer
                 Task::done(cosmic::app::Message::App(Message::CloseWindow))
             }
-            Message::Refresh => {
-                // TODO: st
-                Task::done(cosmic::app::Message::App(Message::OpenWindow))
-            }
             Message::OpenWindow => {
-                if self.window.is_none() {
+                let timeout = self.timeout.clone();
+                let (close_timer, handle) = Task::future(async move {
+                    tokio::time::sleep(timeout).await;
+                    println!("timeout!!!");
+                    cosmic::app::Message::App(Message::CloseWindow)
+                })
+                .abortable();
+                if let Some(old_handle) = self.timer_abort_handle.replace(handle) {
+                    old_handle.abort();
+                };
+
+                if self.window.is_some() {
+                    close_timer
+                } else {
                     let (window_id, task) = window::open(window::Settings::default());
                     self.window = Some(window_id);
-                    task.map(|_| cosmic::app::Message::None)
-                } else {
-                    Task::none()
+                    task.map(|_| cosmic::app::Message::None).chain(close_timer)
                 }
             }
             Message::CloseWindow => {
-                if let Some(self_window) = self.window {
-                    self.window = None;
-                    window::close(self_window)
-                } else {
-                    Task::none()
+                let Some(self_window) = self.window else {
+                    return Task::none();
+                };
+                self.window = None;
+                if let Some(old_handle) = self.timer_abort_handle.take() {
+                    old_handle.abort();
                 }
+                window::close(self_window)
             }
         }
     }
@@ -172,34 +193,66 @@ impl cosmic::Application for AppModel {
         Subscription::run(|| stream::channel(100, event_loop)) // TODO: what is "size" (100)
     }
     fn view_window(&self, id: cosmic::iced::window::Id) -> Element<Self::Message> {
-        let mut list = widget::ListColumn::default();
-        for item in self.list.iter().rev() {
-            list = match item {
-                Ok(s) => list.add(widget::text(s)),
-                Err(e) => list.add(widget::warning(e)),
-            };
-        }
-        widget::scrollable(list).into()
+        widget::container(
+            widget::row()
+                .padding(6)
+                .push(widget::text(format!(
+                    "{:?}",
+                    self.media_status.playback_status
+                )))
+                .push(widget::horizontal_space())
+                .push(
+                    widget::column()
+                        .push(widget::text(
+                            self.media_status
+                                .metadata
+                                .as_ref()
+                                .map(|x| x.title.as_ref())
+                                .flatten()
+                                .map(|x| x.as_str())
+                                .unwrap_or("NO_TITLE"),
+                        ))
+                        .push(widget::text(
+                            self.media_status
+                                .metadata
+                                .as_ref()
+                                .map(|x| x.artist.as_ref())
+                                .flatten()
+                                .map(|x| x.join(", "))
+                                .unwrap_or("NO_ARTIST".to_owned()),
+                        )),
+                )
+                .push(widget::horizontal_space())
+                .push(
+                    widget::column()
+                        .push(widget::text(format!(
+                            "loop: {:?}",
+                            self.media_status.loop_status
+                        )))
+                        .push(widget::text(format!(
+                            "random: {:?}",
+                            self.media_status.shuffle
+                        ))),
+                ),
+        )
+        .padding(12)
+        .style(|_| widget::container::background(iced::Color::BLACK))
+        .into()
     }
-}
-
-struct Timer {
-    duration: Duration,
-}
-
-impl Timer {
-    fn new(duration: Duration) -> Self {
-        todo!()
-    }
-    fn start(&mut self) {}
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Update(String),
+    UpdateMedia(UpdateMedia),
     Error(String),
     Clicked,
-    Refresh,
     OpenWindow,
     CloseWindow,
+}
+
+#[derive(Debug, Clone)]
+enum UpdateMedia {
+    Replace(Properties),
+    Update(Properties),
+    Remove(Vec<String>),
 }
