@@ -1,8 +1,10 @@
 use cosmic::app::{Core, Task};
+use cosmic::cctk::sctk::shell::wlr_layer::Layer as WlrLayer;
 use cosmic::iced::advanced::graphics::futures::stream;
 use cosmic::iced::{self, Subscription, task, window};
 use cosmic::iced_futures::futures::SinkExt;
 use cosmic::iced_futures::futures::channel::mpsc::Sender;
+use cosmic::iced_winit::platform_specific::wayland::commands::layer_surface as wayland_layer_surface_commands;
 use cosmic::prelude::Element;
 use cosmic::widget;
 use monitor::mpris::Properties;
@@ -37,6 +39,7 @@ fn main() -> cosmic::iced::Result {
 // 2. media (mpris)
 // 3. screen brightness (udev?)
 async fn event_loop(mut sender: Sender<Message>) {
+    // TODO: handle pipewire events
     let mut pipewire_receiver = match monitor::pipewire::receiver().await {
         Ok((_, pipewire_receiver)) => pipewire_receiver,
         Err(e) => {
@@ -121,17 +124,22 @@ impl cosmic::Application for AppModel {
         &mut self.core
     }
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+        let window_id = core.main_window_id();
+        tracing::info!("main window id on init: {window_id:?}");
+        let task = match window_id {
+            Some(id) => wayland_layer_surface_commands::set_layer(id, WlrLayer::Overlay),
+            None => Task::none(),
+        };
         let app = Self {
-            window: core.main_window_id(),
             core,
+            window: window_id,
             timeout: Duration::from_secs(2),
             timer_abort_handle: None,
             showing_layer: ShowingLayer::default(),
             media_status: Properties::default(),
             error_message: None,
         };
-        tracing::info!("main window id on init: {:?}", app.window);
-        (app, Task::none())
+        (app, task)
     }
     fn view(&self) -> Element<Self::Message> {
         match self.window {
@@ -177,9 +185,11 @@ impl cosmic::Application for AppModel {
                     Some(_) => Task::none(),
                     None => {
                         let (window_id, open_window) = window::open(window::Settings::default());
-                    self.window = Some(window_id);
-                        open_window.map(|_| cosmic::Action::None)
-                }
+                        self.window = Some(window_id);
+                        open_window.then(|id| {
+                            wayland_layer_surface_commands::set_layer(id, WlrLayer::Overlay)
+                        })
+                    }
                 };
                 Task::batch([open_window, close_timer])
             }
