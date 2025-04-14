@@ -13,6 +13,9 @@ mod config;
 mod monitor;
 
 fn main() -> cosmic::iced::Result {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
     //let (globals, qh) = globals::registry_queue_init().unwrap();
     //let layer_shell = LayerShell::bind(&globals, &qh).unwrap();
 
@@ -21,9 +24,9 @@ fn main() -> cosmic::iced::Result {
         .no_main_window(true)
         .client_decorations(false);
 
-    println!("app running");
+    tracing::info!("app running");
     cosmic::app::run::<AppModel>(settings, ())?;
-    println!("app end");
+    tracing::info!("app end");
 
     //stdout_loop().unwrap();
     Ok(())
@@ -127,7 +130,7 @@ impl cosmic::Application for AppModel {
             media_status: Properties::default(),
             error_message: None,
         };
-        println!("window: {:?}", app.window);
+        tracing::info!("main window id on init: {:?}", app.window);
         (app, Task::none())
     }
     fn view(&self) -> Element<Self::Message> {
@@ -137,7 +140,7 @@ impl cosmic::Application for AppModel {
         }
     }
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
-        println!("update: {:?}", message);
+        tracing::info!("update: {:#?}", message);
         match message {
             Message::UpdateMedia(update) => {
                 self.showing_layer = ShowingLayer::Media;
@@ -148,7 +151,6 @@ impl cosmic::Application for AppModel {
                     }
                     UpdateMedia::Update(properties) => self.media_status.update(properties),
                 }
-                println!("media status: {:#?}", self.media_status);
                 Task::none()
             }
             Message::Error(e) => {
@@ -163,7 +165,7 @@ impl cosmic::Application for AppModel {
                 let timeout = self.timeout.clone();
                 let (close_timer, handle) = Task::future(async move {
                     tokio::time::sleep(timeout).await;
-                    println!("timeout!!!");
+                    tracing::info!("timeout!!!");
                     cosmic::Action::App(Message::CloseWindow)
                 })
                 .abortable();

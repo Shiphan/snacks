@@ -42,11 +42,6 @@ pub enum LoopStatus {
 pub async fn receiver() -> Result<UnboundedReceiver<Event>, zbus::Error> {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let a: Vec<String> = vec![];
-    let b: Option<Vec<String>> = Some(vec![]);
-    dbg!(a.signature());
-    // dbg!(b.signature());
-
     let _method_call_monitor_handle = tokio::spawn(monitor_method_call(tx.clone()).await?);
     let _properties_change_monitor_handle = tokio::spawn(monitor_properties_change(tx).await?);
 
@@ -62,7 +57,7 @@ async fn monitor_method_call<'a>(
         .interface("org.mpris.MediaPlayer2.Player")?
         // .path_namespace("/org/mpris/MediaPlayer2")?
         .build();
-    println!("the match rule: {}", rule.to_string());
+    tracing::info!("the match rule: {}", rule.to_string());
 
     let proxy = Proxy::new(
         &connection,
@@ -82,19 +77,19 @@ async fn monitor_method_call<'a>(
                     if v.header().member().is_some() {
                         Some(Event::NewMethodCall)
                     } else {
-                        println!("a method call but no member (so no method): {v:#?}");
+                        tracing::error!("a method call but no member (so no method): {v:#?}");
                         None
                     }
                 }
                 Ok(None) => {
-                    println!("message stream ended");
+                    tracing::info!("message stream ended");
                     break;
                 }
                 Err(e) => Some(Event::Error(format!("error from stream: {e}"))),
             };
             if let Some(event) = event {
                 if let Err(e) = tx.send(event) {
-                    eprintln!("error: {e}");
+                    tracing::error!("error: {e}");
                     break;
                 }
             }
@@ -112,7 +107,7 @@ async fn monitor_properties_change<'a>(
         .member("PropertiesChanged")?
         // .path_namespace("/org/mpris/MediaPlayer2")?
         .build();
-    println!("the match rule: {}", rule.to_string());
+    tracing::info!("the match rule: {}", rule.to_string());
 
     // let proxy = Proxy::new(
     //     connection,
@@ -133,14 +128,14 @@ async fn monitor_properties_change<'a>(
                     Ok(body) => {
                         let event = Event::Update(body.changed_properties);
                         if let Err(e) = tx.send(event) {
-                            eprintln!("error: {e}");
+                            tracing::error!("error: {e}");
                             break;
                         }
 
                         if !body.invalidated_properties.is_empty() {
                             let event = Event::RemoveProperties(body.invalidated_properties);
                             if let Err(e) = tx.send(event) {
-                                eprintln!("error: {e}");
+                                tracing::error!("error: {e}");
                                 break;
                             }
                         }
@@ -149,17 +144,17 @@ async fn monitor_properties_change<'a>(
                         if let Err(e) =
                             tx.send(Event::Error(format!("deserialize error: {e} ({e:#?})")))
                         {
-                            eprintln!("error: {e}");
+                            tracing::error!("error: {e}");
                             break;
                         }
                     }
                 },
                 Ok(None) => {
-                    println!("message stream ended");
+                    tracing::info!("message stream ended");
                     break;
                 }
                 Err(e) => {
-                    println!("error: {e}");
+                    tracing::error!("error: {e}");
                     break;
                 }
             }

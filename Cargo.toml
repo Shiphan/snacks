@@ -11,6 +11,8 @@ pipewire = "0.8.0"
 serde = "1.0.218"
 tokio = { version = "1.43.0", features = ["full"] }
 toml = "0.8.20"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 update = { path = "./update" }
 zbus = "5.5.0"
 
