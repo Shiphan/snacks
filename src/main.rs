@@ -99,6 +99,7 @@ struct AppModel {
     window: Option<window::Id>,
     timeout: Duration,
     timer_abort_handle: Option<task::Handle>,
+    showing_layer: ShowingLayer,
     media_status: monitor::mpris::Properties,
     error_message: Option<String>,
 }
@@ -122,6 +123,7 @@ impl cosmic::Application for AppModel {
             core,
             timeout: Duration::from_secs(2),
             timer_abort_handle: None,
+            showing_layer: ShowingLayer::default(),
             media_status: Properties::default(),
             error_message: None,
         };
@@ -129,12 +131,16 @@ impl cosmic::Application for AppModel {
         (app, Task::none())
     }
     fn view(&self) -> Element<Self::Message> {
-        widget::row().into()
+        match self.window {
+            Some(id) => self.view_window(id),
+            None => widget::text("Main Window").into(),
+        }
     }
     fn update(&mut self, message: Self::Message) -> Task<Self::Message> {
         println!("update: {:?}", message);
         match message {
             Message::UpdateMedia(update) => {
+                self.showing_layer = ShowingLayer::Media;
                 match update {
                     UpdateMedia::Replace(properties) => self.media_status = properties,
                     UpdateMedia::Remove(properties) => {
@@ -191,6 +197,16 @@ impl cosmic::Application for AppModel {
         Subscription::run(|| stream::channel(100, event_loop)) // TODO: what is "size" (100)
     }
     fn view_window(&self, id: cosmic::iced::window::Id) -> Element<Self::Message> {
+        match self.showing_layer {
+            ShowingLayer::Media => self.media_statues_view(),
+            ShowingLayer::Volume => self.volume_statues_view(),
+            ShowingLayer::None => widget::row().into(),
+        }
+    }
+}
+
+impl AppModel {
+    fn media_statues_view(&self) -> Element<Message> {
         widget::container(
             widget::row()
                 .padding(6)
@@ -237,6 +253,9 @@ impl cosmic::Application for AppModel {
         .style(|_| widget::container::background(iced::Color::BLACK))
         .into()
     }
+    fn volume_statues_view(&self) -> Element<Message> {
+        widget::text("Volume").into()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +265,14 @@ enum Message {
     Clicked,
     OpenWindow,
     CloseWindow,
+}
+
+#[derive(Default)]
+enum ShowingLayer {
+    #[default]
+    None,
+    Media,
+    Volume,
 }
 
 #[derive(Debug, Clone)]
