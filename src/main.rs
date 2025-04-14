@@ -1,17 +1,13 @@
 use cosmic::app::{Core, Task};
 use cosmic::iced::advanced::graphics::futures::stream;
 use cosmic::iced::{self, Subscription, task, window};
-use cosmic::prelude::*;
+use cosmic::iced_futures::futures::SinkExt;
+use cosmic::iced_futures::futures::channel::mpsc::Sender;
+use cosmic::prelude::Element;
 use cosmic::widget;
-use futures::SinkExt;
-use futures::channel::mpsc::Sender;
-use monitor::mpris::{Metadata, PlaybackStatus, Properties};
-use std::sync::Arc;
+use monitor::mpris::Properties;
 use std::time::Duration;
-use tokio::sync::mpsc::{self, UnboundedSender};
 use update::Update;
-//use sctk::reexports::client::globals;
-//use sctk::shell::wlr_layer::LayerShell;
 
 mod config;
 mod monitor;
@@ -151,31 +147,33 @@ impl cosmic::Application for AppModel {
             }
             Message::Error(e) => {
                 self.error_message = Some(format!("error: {e}"));
-                Task::done(cosmic::app::Message::App(Message::OpenWindow))
+                Task::done(cosmic::Action::App(Message::OpenWindow))
             }
             Message::Clicked => {
                 // TODO: stop timer
-                Task::done(cosmic::app::Message::App(Message::CloseWindow))
+                Task::done(cosmic::Action::App(Message::CloseWindow))
             }
             Message::OpenWindow => {
                 let timeout = self.timeout.clone();
                 let (close_timer, handle) = Task::future(async move {
                     tokio::time::sleep(timeout).await;
                     println!("timeout!!!");
-                    cosmic::app::Message::App(Message::CloseWindow)
+                    cosmic::Action::App(Message::CloseWindow)
                 })
                 .abortable();
                 if let Some(old_handle) = self.timer_abort_handle.replace(handle) {
                     old_handle.abort();
                 };
 
-                if self.window.is_some() {
-                    close_timer
-                } else {
-                    let (window_id, task) = window::open(window::Settings::default());
+                let open_window = match self.window {
+                    Some(_) => Task::none(),
+                    None => {
+                        let (window_id, open_window) = window::open(window::Settings::default());
                     self.window = Some(window_id);
-                    task.map(|_| cosmic::app::Message::None).chain(close_timer)
+                        open_window.map(|_| cosmic::Action::None)
                 }
+                };
+                Task::batch([open_window, close_timer])
             }
             Message::CloseWindow => {
                 let Some(self_window) = self.window else {

@@ -1,4 +1,4 @@
-use futures::TryStreamExt;
+use cosmic::iced_futures::futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use update::macros::Update;
