@@ -210,15 +210,15 @@ impl cosmic::Application for AppModel {
     }
     fn view_window(&self, id: cosmic::iced::window::Id) -> Element<Self::Message> {
         match self.showing_layer {
-            ShowingLayer::Media => self.media_statues_view(),
-            ShowingLayer::Volume => self.volume_statues_view(),
+            ShowingLayer::Media => self.media_status_view(),
+            ShowingLayer::Volume => self.volume_status_view(),
             ShowingLayer::None => widget::row().into(),
         }
     }
 }
 
 impl AppModel {
-    fn media_statues_view(&self) -> Element<Message> {
+    fn media_status_view(&self) -> Element<Message> {
         widget::container(
             widget::row()
                 .padding(6)
@@ -265,7 +265,7 @@ impl AppModel {
         .style(|_| widget::container::background(iced::Color::BLACK))
         .into()
     }
-    fn volume_statues_view(&self) -> Element<Message> {
+    fn volume_status_view(&self) -> Element<Message> {
         widget::text("Volume").into()
     }
 }
