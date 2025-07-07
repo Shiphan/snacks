@@ -1,9 +1,14 @@
-use cosmic::iced_futures::futures::TryStreamExt;
+use cosmic::{
+    iced::futures::SinkExt,
+    iced_futures::futures::{TryStreamExt, channel::mpsc::Sender},
+};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinHandle;
 use update::macros::Update;
-use zbus::zvariant::{self, DeserializeDict, DynamicType, SerializeDict, Type};
-use zbus::{Connection, MatchRule, MessageStream, Proxy};
+use zbus::{
+    Connection, MatchRule, MessageStream, Proxy,
+    zvariant::{self, DeserializeDict, SerializeDict, Type},
+};
 
 #[derive(Debug)]
 pub enum Event {
@@ -39,18 +44,25 @@ pub enum LoopStatus {
     Playlist,
 }
 
-pub async fn receiver() -> Result<UnboundedReceiver<Event>, zbus::Error> {
-    let (tx, rx) = mpsc::unbounded_channel();
-
-    let _method_call_monitor_handle = tokio::spawn(monitor_method_call(tx.clone()).await?);
-    let _properties_change_monitor_handle = tokio::spawn(monitor_properties_change(tx).await?);
-
-    Ok(rx)
+pub async fn start<T: Send + 'static>(
+    mut sender: Sender<T>,
+    map: impl Fn(Event) -> T + Clone + Send + Sync + 'static,
+) -> Result<JoinHandle<()>, zbus::Error> {
+    let send = async move |event| {
+        if let Err(e) = sender.send(map(event)).await {
+            tracing::error!("Cannot send to sender: {e}");
+        }
+    };
+    let monitor_method_call = monitor_method_call(send.clone()).await?;
+    let monitor_properties_change = monitor_properties_change(send).await?;
+    Ok(tokio::spawn(async {
+        tokio::join!(monitor_method_call, monitor_properties_change,);
+    }))
 }
 
-async fn monitor_method_call<'a>(
-    tx: UnboundedSender<Event>,
-) -> Result<impl Future<Output = ()> + use<'a>, zbus::Error> {
+async fn monitor_method_call(
+    mut send: impl AsyncFnMut(Event) -> () + Clone,
+) -> Result<impl Future<Output = ()>, zbus::Error> {
     let connection = Connection::session().await?;
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::MethodCall)
@@ -88,18 +100,15 @@ async fn monitor_method_call<'a>(
                 Err(e) => Some(Event::Error(format!("error from stream: {e}"))),
             };
             if let Some(event) = event {
-                if let Err(e) = tx.send(event) {
-                    tracing::error!("error: {e}");
-                    break;
-                }
+                send(event).await;
             }
         }
     })
 }
 
-async fn monitor_properties_change<'a>(
-    tx: UnboundedSender<Event>,
-) -> Result<impl Future<Output = ()> + use<'a>, zbus::Error> {
+async fn monitor_properties_change(
+    mut send: impl AsyncFnMut(Event) -> () + Clone + Send,
+) -> Result<impl Future<Output = ()>, zbus::Error> {
     let connection = Connection::session().await?;
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
@@ -127,26 +136,15 @@ async fn monitor_properties_change<'a>(
                 Ok(Some(v)) => match v.body().deserialize::<PropertiesChanged>() {
                     Ok(body) => {
                         let event = Event::Update(body.changed_properties);
-                        if let Err(e) = tx.send(event) {
-                            tracing::error!("error: {e}");
-                            break;
-                        }
+                        send(event).await;
 
                         if !body.invalidated_properties.is_empty() {
                             let event = Event::RemoveProperties(body.invalidated_properties);
-                            if let Err(e) = tx.send(event) {
-                                tracing::error!("error: {e}");
-                                break;
-                            }
+                            send(event).await;
                         }
                     }
                     Err(e) => {
-                        if let Err(e) =
-                            tx.send(Event::Error(format!("deserialize error: {e} ({e:#?})")))
-                        {
-                            tracing::error!("error: {e}");
-                            break;
-                        }
+                        send(Event::Error(format!("deserialize error: {e} ({e:#?})"))).await;
                     }
                 },
                 Ok(None) => {
